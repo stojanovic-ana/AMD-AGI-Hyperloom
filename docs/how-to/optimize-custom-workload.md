@@ -256,10 +256,23 @@ the bundle rather than the lever.
 ## Other requirements
 
 **GPU type.** `--gpu-type` accepts `mi300x`, `mi308x`, `mi325x`, `mi355x`,
-`r9700` and `radeon8060s` (Strix Halo).
+`r9700`, `radeon8060s` (Strix Halo) and `w7900`.
 Note that **`mi308x` and `mi325x` map to `runner_type=mi300x`** with a warning,
 since those GPUs share the MI300X runner family. Without the flag, Hyperloom
-auto-detects through `rocm-smi --showproductname`.
+auto-detects through `rocm-smi --showproductname`, then the nameplate or PCI
+ID of the launch's one `rocminfo` run.
+
+`w7900` covers the Radeon PRO W7900 and the W7900 Dual Slot (`gfx1100`, 96 CUs).
+It uses Magpie's `vllm_gfx11.sh` with `--framework vllm` only, and targeted
+compiled builds are disabled. Hyperloom identifies it by the exact nameplate
+that `rocm-smi --showproductname` or `rocminfo` prints, or by the PCI ID
+`rocminfo` prints (`1002:7448`, `1002:744a`), never by a bare `gfx1100`: a
+W7800 or an RX 7900 shares the ISA but is refused. A local launch where
+`rocminfo` cannot run or lists no GPU is refused too, and the kernel phase
+needs a GEAK checkout that identifies the card. Its roofline peaks are those
+of TraceLens's bundled `W7900.json`; Hyperloom never measures a spec for it or
+falls back to vendor peaks, so without that file the roofline ceilings are
+recorded as unavailable.
 
 **Pin GPUs with `ROCR_VISIBLE_DEVICES`, not `HIP_VISIBLE_DEVICES`.** On the known
 ROCm stack the latter can make `torch.cuda.is_available()` return false.

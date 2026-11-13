@@ -52,6 +52,7 @@ def test_canon_arch_names_no_target_rather_than_a_wrong_one(value):
         ("gfx1201", "r9700"),
         ("Radeon 8060S", "radeon8060s"),
         ("gfx1100", "gfx1100"),
+        ("W7900", "w7900"),
         ("MI250-X", "mi250_x"),
     ],
 )
@@ -87,7 +88,13 @@ def test_product_arch_maps_only_an_exact_product_name(value, expected):
     assert product_arch(value) == expected
 
 
-@pytest.mark.parametrize("board", AMD_GPU_BOARDS.values(), ids=lambda board: board.product)
+@pytest.mark.parametrize(
+    "board",
+    # A board named by its nameplate shares its target with products the table does not list, so a bare target never
+    # names it.
+    [b for b in AMD_GPU_BOARDS.values() if not b.marketing_names],
+    ids=lambda board: board.product,
+)
 def test_every_board_the_shared_table_knows_is_recorded_under_a_board_of_its_own_target(board):
     recorded = canonical_gpu_type(board.gfx)
 

@@ -29,7 +29,10 @@ def add_gpu_partition_arguments(opt: argparse.ArgumentParser) -> None:
         "wins when both are present and disagree; a WARN is "
         "emitted to stderr so the operator sees the typo. Used "
         "verbatim only when the probe fails (CPU sandbox / no "
-        "rocm-smi). Magpie runner_type is derived separately; "
+        "rocm-smi). The exception is a board identified only by its nameplate or PCI ID ("
+        + ", ".join(sorted(product for product, board in AMD_GPU_BOARDS.items() if board.marketing_names))
+        + "): every GPU rocminfo shows must be that board, so a disagreement either way exits with code 2, and so "
+        "does a local launch where rocminfo shows no GPU. Magpie runner_type is derived separately; "
         "mi308x and mi325x currently run with mi300x runner scripts because "
         "Magpie does not yet ship MI308X/MI325X-specific SGLang/vLLM scripts.",
     )

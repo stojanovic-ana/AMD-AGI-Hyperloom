@@ -306,6 +306,19 @@ def internal_extension_arch_json(platform: str, *, log: Callable[[str], None]) -
     return None
 
 
+def bundled_arch_json(platform: str, *, board: str, log: Callable[[str], None]) -> ArchSpec | None:
+    """The bundled GPU arch JSON for a board whose spec is never measured, or ``None`` (roofline ceilings unavailable)."""
+    existing = resolve_arch_json_path(platform)
+    if existing is not None and existing.is_file():
+        log(f"gpu_arch_json: using bundled spec {existing}")
+        return ArchSpec(existing, ArchSpecSource.BUNDLED)
+    log(
+        f"gpu_arch_json: no bundled spec for {normalize_platform(platform)}, and {board.strip().lower()} is not "
+        "measured; roofline ceilings unavailable"
+    )
+    return None
+
+
 def _measure_arch_spec(
     tracelens_root: Path, platform: str, *, log: Callable[[str], None], run_command: Callable[..., int]
 ) -> Path:

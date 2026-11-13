@@ -39,16 +39,16 @@ def isolated_env(monkeypatch):
         monkeypatch.setenv(key, "")
 
 
-def _seed(tmp_path, monkeypatch, framework: str) -> None:
+def _seed(tmp_path, monkeypatch, framework: str, gpu_type: str = "r9700", *extra: str) -> None:
     args = _build_parser().parse_args(
-        ["optimize", "--model", "/model", "--framework", framework, "--gpu-type", "r9700"]
+        ["optimize", "--model", "/model", "--framework", framework, "--gpu-type", gpu_type, *extra]
     )
     configure_benchmark(args)
     launch_shape._resolve_run_topology(args)
     for name in ("_enforce_expected_framework", "_apply_operator_supplied_paths", "_check_gfx_arch_resolvable"):
         monkeypatch.setattr(cli, name, lambda *a, **kw: None)
     monkeypatch.setattr(cli, "_should_remote_probe_gpu", lambda args: False)
-    monkeypatch.setattr(cli, "_autodetect_gpu_type", lambda: None)
+    monkeypatch.setattr(cli, "_autodetect_gpu_type", lambda agents=None: None)
     monkeypatch.setattr(cli, "resolve_framework_version", lambda args: "test-version")
     monkeypatch.setattr(cli, "make_session_dir", lambda **kw: tmp_path)
     monkeypatch.setattr(cli, "_acquire_session_lock_or_exit", lambda path: None)
@@ -73,6 +73,20 @@ def test_fresh_r9700_sglang_launch_exits_2(tmp_path, monkeypatch, capsys):
 
 def test_fresh_r9700_vllm_launch_passes_the_gate(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch, "vllm")
+
+
+def test_fresh_w7900_sglang_launch_exits_2(tmp_path, monkeypatch, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _seed(tmp_path, monkeypatch, "sglang", "w7900", "--no-kernel")
+    assert exc.value.code == 2
+    assert "no validated gfx11 runner" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flags", [(), ("--no-kernel",)], ids=["kernel-phase", "no-kernel"])
+def test_fresh_w7900_vllm_launch_passes_the_gate(tmp_path, monkeypatch, flags):
+    _seed(tmp_path, monkeypatch, "vllm", "w7900", *flags)
+    assert cli.os.environ["GPU_TYPE"] == "gfx11"
+    assert cli.os.environ["TARGET_GPU_TYPE"] == "w7900"
 
 
 def test_resume_runs_the_gate():

@@ -10,6 +10,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 
+def _probe_value(line: str) -> str:
+    """The value of one probe line (``GPU[0] : Card Series: <name>``, ``Marketing Name: <name>``), spaces collapsed."""
+    return " ".join(line.rsplit(":", 1)[-1].split())
+
+
 @dataclass(frozen=True)
 class GpuBoard:
     """One AMD board as the hardware describes it; Hyperloom's policy for it lives in ``gpu_types``."""
@@ -34,11 +39,23 @@ class GpuBoard:
     #: listed under their board. 0x74a2 and 0x74b6 are left out on purpose: the same id is both an MI308X and, at
     #: revision A1, an MI300X, so it names no single board and the caller falls back to the name. So is 0x7551, the
     #: R9700 at revisions C0 and C1 (R9700S) and the R9600D at C8: the R9700 lists no id and is known by its name alone.
-    #: The Radeon 8060S lists none either and is known by its name.
+    #: The Radeon 8060S lists none either and is known by its name. rocminfo prints the same id as its ``Chip ID``
+    #: (``0x744a``), which names a card whose rocminfo Marketing Name is empty.
     device_ids: frozenset[str] = frozenset()
+    #: The full nameplates (rocm-smi Card Series, rocminfo Marketing Name) that alone name the board, compared whole
+    #: and ignoring case. A board that lists them is never named by its product key or a substring, because other
+    #: boards on the same ISA carry names that contain it.
+    marketing_names: tuple[str, ...] = ()
 
     def named_in(self, text: str) -> bool:
-        """Whether ``text`` names this board as a whole word; a longer name such as ``MI300XL`` is another product."""
+        """Whether ``text`` names this board as a whole word; a longer name such as ``MI300XL`` is another product.
+
+        A board with ``marketing_names`` is named only by a line whose value (the line, or what follows its last
+        ``:``) is one of them.
+        """
+        if self.marketing_names:
+            names = {name.casefold() for name in self.marketing_names}
+            return any(_probe_value(line).casefold() in names for line in text.splitlines())
         upper = text.upper()
         return any(
             re.search(rf"(?<![A-Z0-9]){re.escape(name.upper())}(?![A-Z0-9])", upper) is not None
@@ -125,6 +142,18 @@ AMD_GPU_BOARDS: dict[str, GpuBoard] = {
             vendor_peak_tflops={"bf16": 60.0, "fp16": 60.0},
             aliases=("Radeon 8060S",),
         ),
+        # The W7900 and the W7900 Dual Slot are one board with two coolers. The peaks are TraceLens's bundled
+        # W7900.json, which has no BF16 rate; it is read as FP16, as for every board.
+        GpuBoard(
+            "w7900",
+            "gfx1100",
+            96,
+            hbm_gb=48.0,
+            hbm_bw_gbps=864.0,
+            vendor_peak_tflops={"bf16": 123.0, "fp16": 123.0, "fp32": 61.3},
+            device_ids=frozenset({"7448", "744a"}),
+            marketing_names=("AMD Radeon Pro W7900", "AMD Radeon Pro W7900 Dual Slot"),
+        ),
     )
 }
 
@@ -169,13 +198,79 @@ def is_gfx_arch(gpu_type: str | None, arch: str) -> bool:
     return bool(key) and (key == arch or gfx_arch_for_gpu_type(key) == arch)
 
 
+@dataclass(frozen=True)
+class GpuAgent:
+    """One GPU agent as rocminfo lists it."""
+
+    gfx: str
+    #: rocminfo ``Marketing Name``, spaces collapsed; empty when rocminfo prints none.
+    marketing_name: str = ""
+    #: PCI device ID from rocminfo ``Chip ID`` (``0x744a``); empty when unreadable.
+    chip_id: str = ""
+    compute_units: int | None = None
+
+    @property
+    def pci_device_id(self) -> str:
+        """``vendor:device`` (``1002:744a``), or empty when the chip ID is unknown."""
+        return f"1002:{self.chip_id.removeprefix('0x')}" if self.chip_id else ""
+
+
+def board_of_agent(agent: GpuAgent) -> GpuBoard | None:
+    """The board an agent's Marketing Name names, else the board its chip ID (PCI device ID) belongs to."""
+    named = board_named_in(agent.marketing_name) if agent.marketing_name else None
+    if named or not agent.chip_id:
+        return named
+    return gpu_board(gpu_type_for_device_id(agent.chip_id))
+
+
+_AGENT_HEADER = re.compile(r"^\s*Agent\s+\d+\s*$")
+_AGENT_FIELD = re.compile(r"^\s*([^:]+?)\s*:\s*(.*?)\s*$")
+_AGENT_GFX = re.compile(r"gfx[0-9a-f]+")
+_CHIP_ID = re.compile(r"\(0x([0-9a-f]+)\)", re.IGNORECASE)
+
+
+def rocminfo_gpu_agents(text: str | None) -> list[GpuAgent]:
+    """The GPU agents in rocminfo output, in its order; CPU agents and ``gfx000`` are left out.
+
+    An agent's own fields come first in its block, ahead of its nested ISA and cache sections, so the first value of
+    each field is the agent's.
+    """
+    blocks: list[dict[str, str]] = []
+    for line in str(text or "").splitlines():
+        if _AGENT_HEADER.match(line):
+            blocks.append({})
+            continue
+        match = _AGENT_FIELD.match(line)
+        if blocks and match:
+            blocks[-1].setdefault(match.group(1).lower(), match.group(2))
+    agents: list[GpuAgent] = []
+    for fields in blocks:
+        gfx = fields.get("name", "").lower()
+        if not _AGENT_GFX.fullmatch(gfx) or gfx == "gfx000":
+            continue
+        chip = _CHIP_ID.search(fields.get("chip id", ""))
+        cus = fields.get("compute unit", "")
+        agents.append(
+            GpuAgent(
+                gfx=gfx,
+                marketing_name=" ".join(fields.get("marketing name", "").split()),
+                chip_id=f"0x{chip.group(1).lower()}" if chip else "",
+                compute_units=int(cus) if cus.isdigit() else None,
+            )
+        )
+    return agents
+
+
 __all__ = [
     "AMD_GPU_BOARDS",
+    "GpuAgent",
     "GpuBoard",
     "board_named_in",
+    "board_of_agent",
     "gfx_arch_for_gpu_type",
     "gpu_board",
     "gpu_type_for_device_id",
     "is_gfx_arch",
     "normalise_device_id",
+    "rocminfo_gpu_agents",
 ]

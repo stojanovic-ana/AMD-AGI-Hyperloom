@@ -1066,6 +1066,22 @@ def test_124_tracelens_analysis_fails_fast_on_cpu_only_trace(tmp_path):
     )
 
 
+@pytest.mark.parametrize(("board", "measures"), [("w7900", False), ("mi300x", True), ("r9700", True)])
+def test_only_a_board_whose_arch_spec_is_measurable_runs_the_microbench(tmp_path, board, measures):
+    import argparse
+    from types import SimpleNamespace
+
+    run = SimpleNamespace(
+        args=argparse.Namespace(target_platform=board.upper()), log_path=tmp_path / "log", session_runs_dir=tmp_path
+    )
+    with (
+        patch.object(tla, "bundled_arch_json", return_value=None) as bundled,
+        patch.object(tla, "populate_gpu_arch_json", return_value=None) as populate,
+    ):
+        tla._gpu_arch_json(run, tl_root=tmp_path, tl_internal_root=None)
+    assert (populate.called, bundled.called) == (measures, not measures)
+
+
 def _run_agent_route_to_a_skill_error(tmp_path, monkeypatch, capsys, skill_error):
     """Run ``main`` on the agent route with a skill that raises ``skill_error``; return rc, result and arch calls."""
     trace = tmp_path / "trace.json"

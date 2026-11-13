@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 from dataclasses import dataclass
-import json
 import logging
 import os
 import sys
@@ -21,6 +20,7 @@ from hyperloom_common.llm import llm_config
 from hyperloom_common.env import EnvValueError, env_bool
 from hyperloom.common import agent_isolation
 from hyperloom.common.gpu_partition import PartitionModel
+from .launch_gpu import launch_gpu_identity, launch_gpu_probe, publish_gpu_identity, publish_gpu_power_settings
 from .lineup_banners import print_lineup_banners
 from .kb import (
     _bootstrap_recipe_kb,
@@ -46,6 +46,7 @@ from ..gpu_types import (
     gpu_runner_type,
     _resolve_amd_gpu_type,
     _resolve_gpu_type,
+    require_gpu_type_agreement,
     require_runner_framework,
     warn_family_runner,
 )
@@ -666,16 +667,6 @@ def _export_partition_shape(
     return session_shape_summary(verdict.layout, streams, fanout_expected=fanout)
 
 
-def _publish_gpu_power_settings(record: Mapping[str, Any]) -> None:
-    """Expose the recorded power settings to the platform fingerprint, the way the partition shape is."""
-    from hyperloom.common.platform_probe import GPU_POWER_SETTINGS_ENV
-
-    if record:
-        os.environ[GPU_POWER_SETTINGS_ENV] = json.dumps(record, sort_keys=True)
-    else:
-        os.environ.pop(GPU_POWER_SETTINGS_ENV, None)
-
-
 def _restore_partition_shape_from_state(args: Any, state: SharedState) -> None:
     """Fill the partition flags from the archive when this resume omitted them."""
     archived = dict(getattr(state, "compute_partition", None) or {})
@@ -919,7 +910,7 @@ def _restore_platform_state(args: argparse.Namespace, state: SharedState, sessio
         session_lock.release()
         print(f"ERROR: cannot resume this session -- {_gpu_power_error}.", file=sys.stderr)
         sys.exit(2)
-    _publish_gpu_power_settings(gpu_power)
+    publish_gpu_power_settings(gpu_power)
     state.gpu_power_settings = gpu_power
     state.compute_partition = _export_partition_shape(
         PartitionRequest(getattr(args, "compute_partition_mode", None), getattr(args, "streams_per_partition", None)),
@@ -1249,6 +1240,7 @@ async def _resume_session(args: argparse.Namespace) -> _SessionStart:
     )
     # After the re-export, not before: both read the GPU_TYPE and the framework it put back.
     _restore_platform_state(args, state, session.session_lock)
+    publish_gpu_identity(session.manifest.get("gpu_identity"))
     _restore_phase_toggles(args, state, session_dir)
     _open_next_leg(args, state, session)
     return session
@@ -1265,7 +1257,9 @@ def _resolve_target_gpu(args: argparse.Namespace, framework: str) -> None:
         if probed:
             print(f"GPU probe       : {probed} (remote {(args.mn_backend or 'rayjob').lower()})")
     else:
-        probed = _autodetect_gpu_type() or ""
+        probe = launch_gpu_probe(args)
+        probed = _autodetect_gpu_type(agents=probe.agents if probe else None) or ""
+    require_gpu_type_agreement(user_specified, probed)
     gpu_type, gpu_warnings = _resolve_gpu_type(user_specified=user_specified, probed=probed)
     for line in gpu_warnings:
         print(line, file=sys.stderr)
@@ -1287,7 +1281,8 @@ def _resolve_target_gpu(args: argparse.Namespace, framework: str) -> None:
 
     # Runs here, not in _preflight, because the question it asks -- will provenance be able to name the ISA? -- is
     # unanswerable until args.gpu_type is final.
-    _check_gfx_arch_resolvable(args.gpu_type)
+    probe = launch_gpu_probe(args)
+    _check_gfx_arch_resolvable(args.gpu_type, observed_gfx=probe.agents[0].gfx if probe and probe.agents else None)
 
 
 def _create_fresh_session(args: argparse.Namespace, *, framework: str, nodes_resolved: int) -> _SessionStart:
@@ -1301,6 +1296,7 @@ def _create_fresh_session(args: argparse.Namespace, *, framework: str, nodes_res
     from .benchmark_config import bind_benchmark
 
     bind_benchmark(session_dir, args)
+    publish_gpu_identity(launch_gpu_identity(args))
     manifest = write_manifest(session_dir, args=args)
     _persist_install_event(args, session_dir)
     # One-shot Langfuse startup marker so a run killed before a breakdown still leaves a correlatable trace.
@@ -1334,7 +1330,7 @@ def _create_fresh_session(args: argparse.Namespace, *, framework: str, nodes_res
         model=PartitionModel(str(args.model), getattr(args, "precision", None)),
     )
     gpu_power = resolve_launch_gpu_power(args, nodes=nodes_resolved, owner=str(manifest["session_id"]))
-    _publish_gpu_power_settings(gpu_power)
+    publish_gpu_power_settings(gpu_power)
     _seed_shared_state(
         session_dir,
         args,

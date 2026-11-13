@@ -148,8 +148,22 @@ def test_r9700_materializes_vllm_gfx12_runner(tmp_path):
     assert bench["benchmark_script"] == "vllm_gfx12.sh"
 
 
-def test_r9700_materialized_config_is_lifecycle_eligible(tmp_path, monkeypatch):
-    """An R9700 session's materialized config may hold one server across rounds (baseline, explore, conc sweep)."""
+def test_w7900_materializes_vllm_gfx11_runner(tmp_path):
+    src = tmp_path / "cfg.yaml"
+    _write_yaml(src, "vllm")
+    out = materialize_config_with_envs(
+        src,
+        tmp_path / "out",
+        target=BenchmarkTarget(model_path="/m", gpu_type="w7900"),
+    )
+    bench = yaml.safe_load(out.read_text())["benchmark"]
+    assert bench["runner_type"] == "gfx11"
+    assert bench["benchmark_script"] == "vllm_gfx11.sh"
+
+
+@pytest.mark.parametrize("gpu_type", ["r9700", "w7900"])
+def test_radeon_materialized_config_is_lifecycle_eligible(tmp_path, monkeypatch, gpu_type):
+    """A Radeon session's materialized config may hold one server across rounds (baseline, explore, conc sweep)."""
     from hyperloom.orchestrator.actions.executors import _server_lifecycle as sl
     from hyperloom.orchestrator.actions.executors import benchmark_backend as bb
 
@@ -160,7 +174,7 @@ def test_r9700_materialized_config_is_lifecycle_eligible(tmp_path, monkeypatch):
     out = materialize_config_with_envs(
         src,
         tmp_path / "out",
-        target=BenchmarkTarget(model_path="/m", gpu_type="r9700"),
+        target=BenchmarkTarget(model_path="/m", gpu_type=gpu_type),
     )
 
     info = sl.resolve_lifecycle_params(out)

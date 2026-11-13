@@ -91,6 +91,34 @@ def test_single_physical_gpu_env_matches_tracelens_idle_gate() -> None:
         assert resolve_physical_device(0)[0] == 6
 
 
+def test_bundled_arch_json_returns_the_bundled_spec(tmp_path: Path) -> None:
+    bundled = tmp_path / "W7900.json"
+    bundled.write_text("{}", encoding="utf-8")
+    with (
+        patch.object(tab, "resolve_arch_json_path", return_value=bundled),
+        patch.object(tab, "_run_microbench_on_idle_gpu") as microbench,
+    ):
+        assert tab.bundled_arch_json("W7900", board="w7900", log=lambda _msg: None) == tab.ArchSpec(
+            bundled, tab.ArchSpecSource.BUNDLED
+        )
+    microbench.assert_not_called()
+
+
+def test_bundled_arch_json_never_measures_or_falls_back(tmp_path: Path) -> None:
+    logged: list[str] = []
+    with (
+        patch.object(tab, "resolve_arch_json_path", return_value=None),
+        patch.object(tab, "_run_microbench_on_idle_gpu") as microbench,
+        patch.object(tab, "write_vendor_peak_arch_spec") as fallback,
+    ):
+        assert tab.bundled_arch_json("W7900", board="w7900", log=logged.append) is None
+    microbench.assert_not_called()
+    fallback.assert_not_called()
+    assert logged == [
+        "gpu_arch_json: no bundled spec for W7900, and w7900 is not measured; roofline ceilings unavailable"
+    ]
+
+
 def test_populate_gpu_arch_json_uses_bundled_spec(tmp_path: Path) -> None:
     bundled = tmp_path / "MI300X.json"
     bundled.write_text("{}", encoding="utf-8")

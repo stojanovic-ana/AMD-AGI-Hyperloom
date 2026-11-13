@@ -178,8 +178,8 @@ the bundle rather than the lever.
 ## GPU Runner Type
 
 Pick the GPU explicitly with `--gpu-type` or `$GPU_TYPE`; without either, the
-optimizer auto-detects via `rocm-smi --showproductname` (falling back to
-`torch.cuda.get_device_properties(0).gcnArchName`).
+optimizer auto-detects via `rocm-smi --showproductname` (falling back to the
+`rocminfo` Marketing Name, then `torch.cuda.get_device_properties(0).gcnArchName`).
 
 ```bash
 python3 -m hyperloom optimize --gpu-type mi355x --model "$MODEL_PATH" --max-hours 2
@@ -187,7 +187,7 @@ GPU_TYPE=mi300x python3 -m hyperloom optimize --model "$MODEL_PATH" --max-hours 
 ```
 
 Accepted values: `mi300x`, `mi308x`, `mi325x`, `mi355x`, `r9700`,
-`radeon8060s`. **`mi308x` and
+`radeon8060s`, `w7900`. **`mi308x` and
 `mi325x` map to `runner_type=mi300x`** with a warning, since the GPUs share the
 same runner family and Magpie has not shipped MI308X/MI325X-specific SGLang/vLLM
 scripts yet. If you need a true MI308X/MI325X-specific script, uncomment the `benchmark_script:` template in the
@@ -197,6 +197,14 @@ relevant YAML and point it at your script under `InferenceX/benchmarks/...`.
 `vllm_gfx12.sh`, and runs with `--framework vllm` only: pass
 `--framework vllm`, since another framework (including the default) exits
 with code 2 at launch.
+
+`w7900` (Radeon PRO W7900 and W7900 Dual Slot, gfx1100) maps to
+`runner_type=gfx11`, Magpie's `vllm_gfx11.sh`, and runs with `--framework vllm`
+only. It is identified by the exact nameplate or its PCI ID (`1002:7448`,
+`1002:744a`), never by a bare gfx1100, and a `--gpu-type` the probe
+contradicts on either side of a W7900 exits with code 2, as do a local
+`--gpu-type w7900` launch rocminfo shows no GPU for and a kernel phase whose
+GEAK does not identify the card. Targeted compiled builds are disabled.
 
 Do not set `HIP_VISIBLE_DEVICES` on the known ROCm stack unless the user asks;
 it can make `torch.cuda.is_available()` return false. Use

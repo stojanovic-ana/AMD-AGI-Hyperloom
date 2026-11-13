@@ -29,10 +29,12 @@ from hyperloom.inference_optimizer.framework_paths import (
 
 from .tracelens_arch_benchmark import (
     ArchSpec,
+    bundled_arch_json,
     internal_extension_arch_json,
     normalize_platform,
     populate_gpu_arch_json,
 )
+from hyperloom.inference_optimizer.gpu_types import arch_spec_measurable
 from .tracelens_skill_runner import (
     TraceLensSkillRequest,
     TraceLensSkillRunResult,
@@ -129,11 +131,18 @@ def _trajectory_scope(args: argparse.Namespace) -> contextlib.AbstractContextMan
 
 
 def _gpu_arch_json(run: AnalysisRun, *, tl_root: Path, tl_internal_root: Path | None) -> ArchSpec | None:
-    """The arch JSON roofline reads: the bundled spec under the internal extension, else bundled, measured or fallback."""
+    """The arch JSON roofline reads: the bundled spec under the internal extension, else bundled, measured or fallback.
+
+    A board whose policy forbids measuring gets the bundled spec or nothing.
+    """
     log_path = run.log_path
     arch_benchmark_timeout_s = _resolve_arch_benchmark_timeout_s()
     if tl_internal_root is not None:
         return internal_extension_arch_json(run.args.target_platform, log=lambda msg: append_log(log_path, msg))
+    if not arch_spec_measurable(run.args.target_platform):
+        return bundled_arch_json(
+            run.args.target_platform, board=run.args.target_platform, log=lambda msg: append_log(log_path, msg)
+        )
     return populate_gpu_arch_json(
         tracelens_root=tl_root,
         platform=run.args.target_platform,

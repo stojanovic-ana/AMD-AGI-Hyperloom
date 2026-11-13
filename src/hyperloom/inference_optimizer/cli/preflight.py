@@ -57,6 +57,8 @@ from .framework_probe import (
     _setup_install_command,
 )
 from .geak_binaries import check_geak_binaries
+from .launch_gpu import check_gpu_launch, check_tracelens_arch_spec
+from .resumed_session import _resumed_session_state
 from .ir3_probe import run_ir3_probe_script
 from .preflight_env import (
     _ANTHROPIC_FALLBACK_KEYS,
@@ -470,23 +472,6 @@ def _install_pinned_lm_eval(python_exe: str, pip_extra: list[str]) -> None:
         print(f"Preflight: WARNING — pinned lm_eval via {source} failed; falling back")
 
 
-def _resumed_session_state(args: argparse.Namespace) -> dict[str, Any] | None:
-    """The persisted ``state.json`` of the session ``--resume-from`` names, or ``None``.
-
-    Preflight runs before the resume block loads the session, so anything preflight decides from a session-pinned
-    setting has to read it here. ``None`` (no session named, or no readable state) leaves the decision to the flags;
-    the resume block reports a missing or unreadable state itself.
-    """
-    raw = str(getattr(args, "resume_from", "") or "").strip()
-    if not raw:
-        return None
-    try:
-        state = json.loads((Path(raw).expanduser() / "state.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return state if isinstance(state, dict) else None
-
-
 def _supported_framework_names() -> tuple[str, ...]:
     """The framework names ``--framework`` accepts (the framework registry)."""
     from hyperloom.inference_optimizer import framework_registry
@@ -738,9 +723,12 @@ def _check_shm_disk() -> dict[str, Any]:
     }
 
 
-def _check_gfx_arch_resolvable(gpu_type: str | None = None) -> None:
-    """Warn when the GPU architecture cannot be resolved for provenance."""
-    if detect_gfx_arch(os.environ, gpu_type=gpu_type):
+def _check_gfx_arch_resolvable(gpu_type: str | None = None, *, observed_gfx: str | None = None) -> None:
+    """Warn when the GPU architecture cannot be resolved for provenance.
+
+    ``observed_gfx`` is the ISA the launch's rocminfo run read, so this runs no rocminfo of its own.
+    """
+    if observed_gfx or detect_gfx_arch(os.environ, gpu_type=gpu_type, probe=False):
         return
     boards = "/".join(sorted(AMD_GPU_BOARDS))
     print(
@@ -1418,7 +1406,7 @@ def _prepare_inferencex(install_event: Any, *, magpie_active: bool) -> str:
     return inferencex_path
 
 
-def _check_kernel_and_tracelens_clis(install_event: Any, args: argparse.Namespace) -> None:
+def _check_kernel_and_tracelens_clis(install_event: Any, args: argparse.Namespace, gpu_type: str | None = None) -> None:
     """Check the kernel-tuning and TraceLens CLIs before the Coordinator starts.
 
     A hard failure here catches launchers that skip install.sh, rather than
@@ -1428,6 +1416,7 @@ def _check_kernel_and_tracelens_clis(install_event: Any, args: argparse.Namespac
     """
     no_kernel = getattr(args, "no_kernel", False)
     enable_roofline = getattr(args, "enable_roofline", True)
+    check_tracelens_arch_spec(install_event, args, gpu_type, run_step=_run_install_step)
     if no_kernel:
         _record_install_step(
             install_event,
@@ -1494,8 +1483,8 @@ def _validate_explicit_server_limits(args: argparse.Namespace) -> None:
     validate_server_args(effective, resolve_serving_model_path(model, model_base=pins.get("HL_MODEL_BASE")))
 
 
-def _normalize_preflight_env(args: argparse.Namespace, install_event: dict[str, Any]) -> None:
-    """Load the operator env files, normalize provider and framework env, and validate credentials."""
+def _normalize_preflight_env(args: argparse.Namespace, install_event: dict[str, Any]) -> str | None:
+    """Load the operator env files, normalize provider and framework env, validate credentials; return the GPU type."""
     _run_install_step(
         install_event,
         step_id="load_dotenv",
@@ -1520,6 +1509,7 @@ def _normalize_preflight_env(args: argparse.Namespace, install_event: dict[str, 
         category="check",
         action=lambda: _validate_explicit_server_limits(args),
     )
+    gpu_type = check_gpu_launch(args, install_event, run_step=_run_install_step)
     _derive_runtime_paths()
     _restore_provider_only_mode(provider_mode, provider_snapshot)
     _run_install_step(
@@ -1539,6 +1529,7 @@ def _normalize_preflight_env(args: argparse.Namespace, install_event: dict[str, 
         action=_validate_credentials,
         detail={"exit_code": 0},
     )
+    return gpu_type
 
 
 def _check_host_runtime(install_event: dict[str, Any]) -> None:
@@ -1616,7 +1607,7 @@ def _preflight(args: argparse.Namespace) -> tuple[str, str]:
     """Auto-install missing runtime deps and export auth aliases."""
     _pin_resumed_session_args(args)
     install_event = _begin_install_event(args)
-    _normalize_preflight_env(args, install_event)
+    gpu_type = _normalize_preflight_env(args, install_event)
 
     # --- Resolve install interpreters --- Resolve the ACTIVE benchmark backend first so a bypass-only environment (no
     # Magpie / no /opt/venv) never routes installs through Magpie's interpreter.
@@ -1681,7 +1672,7 @@ def _preflight(args: argparse.Namespace) -> tuple[str, str]:
 
     _check_agent_cli()
 
-    _check_kernel_and_tracelens_clis(install_event, args)
+    _check_kernel_and_tracelens_clis(install_event, args, gpu_type=gpu_type)
 
     _run_closing_preflight_steps(install_event, args, magpie_python=magpie_python, resolved_urls=resolved_urls)
 

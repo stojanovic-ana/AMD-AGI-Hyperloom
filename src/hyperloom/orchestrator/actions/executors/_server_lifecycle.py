@@ -433,8 +433,8 @@ def free_gpus_for_handoff(
 
     Args:
         session_dir: The session whose ``runs/`` pidfiles name the leftovers.
-        cards: Physical card indices as rocm-smi numbers them; ``None`` when the caller could not resolve them, which
-            still reaps but verifies nothing.
+        cards: Physical card indices as amd-smi and rocm-smi number them (PCI order), never ROCm's KFD-ordered
+            ordinals; ``None`` when the caller could not resolve them, which still reaps but verifies nothing.
         timeout_sec: How long the cards are given to drain.
         poll_sec: How often VRAM is re-read meanwhile.
 

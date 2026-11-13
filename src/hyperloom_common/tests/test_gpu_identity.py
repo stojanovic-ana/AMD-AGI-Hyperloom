@@ -27,6 +27,8 @@ def test_a_device_id_belongs_to_one_board():
         ("0x75b0", "mi350x"),
         ("0x74a1", "mi300x"),
         ("0x74a5", "mi325x"),
+        ("0x7448", "w7900"),
+        ("0x744a", "w7900"),
     ],
 )
 def test_the_boards_the_measured_nodes_report(device_id, board):
